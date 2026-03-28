@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: profiles
+    // - id: string (required)
+    // - full_name: string
+    // - avatar_url: string
+    // - role: string (required, enum: buyer, seller, broker, admin)
+    // - bio: string
+    // - created_at: timestamp
+    //
+    // Collection: listings
+    // - id: string
+    // - seller_id: string (required)
+    // - title: string (required)
+    // - description: string
+    // - price: number (required)
+    // - location: string
+    // - revenue_range: string
+    // - category: string
+    // - images: list
+    // - documents: list
+    // - is_active: bool
+    // - created_at: timestamp
+    //
+    // Collection: messages
+    // - id: string
+    // - sender_id: string (required)
+    // - receiver_id: string (required)
+    // - listing_id: string
+    // - content: string (required)
+    // - is_read: bool
+    // - created_at: timestamp
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "levipicolino@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidProfile(data) {
+      return data.role in ['buyer', 'seller', 'broker', 'admin'] &&
+             (!('full_name' in data) || data.full_name is string) &&
+             (!('bio' in data) || data.bio is string);
+    }
+
+    function isValidListing(data) {
+      return data.seller_id is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.price is number && data.price >= 0;
+    }
+
+    function isValidMessage(data) {
+      return data.sender_id == request.auth.uid &&
+             data.receiver_id is string &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 5000;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /profiles/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidProfile(request.resource.data) && (request.resource.data.role != 'admin' || isAdmin());
+      allow update: if isOwner(userId) && isValidProfile(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /listings/{listingId} {
+      allow read: if true; // Public directory
+      allow create: if isAuthenticated() && isValidListing(request.resource.data) && request.resource.data.seller_id == request.auth.uid;
+      allow update: if isAuthenticated() && (resource.data.seller_id == request.auth.uid || isAdmin()) && isValidListing(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.seller_id == request.auth.uid || isAdmin());
+    }
+
+    match /messages/{messageId} {
+      allow read: if isAuthenticated() && (resource.data.sender_id == request.auth.uid || resource.data.receiver_id == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidMessage(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.receiver_id == request.auth.uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['is_read']);
+    }
+  }
+}
